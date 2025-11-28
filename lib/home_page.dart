@@ -1,10 +1,12 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_crudnote/auth_service.dart';
-import 'package:firebase_crudnote/crud_service.dart';
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'crud_service.dart';
+import 'Login.dart';
 
 class HomePage extends StatefulWidget {
-  const HomePage({super.key});
+  HomePage({super.key});
 
   @override
   State<HomePage> createState() => _HomePageState();
@@ -12,276 +14,340 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   final CrudService service = CrudService();
-  final AuthService auth = AuthService();
-  final TextEditingController _nameController = TextEditingController();
-  final TextEditingController _quantityController = TextEditingController();
-  bool showFavoritesOnly = false;
+  final TextEditingController nameCtrl = TextEditingController();
+  final TextEditingController qtyCtrl = TextEditingController();
+
+  final Color lightBlue = Colors.lightBlue;
+  final Color lightGrey = Colors.blueGrey;
+
+  File? selectedImageFile;
+  String? selectedImageUrl;
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.blueGrey,
+      backgroundColor: lightGrey,
+
       appBar: AppBar(
-        leading: IconButton(
-          onPressed: () {
-            auth.signOut();
-          },
-          icon: Icon(Icons.logout, color: Colors.white),
-        ),
         title: const Text(
-          'Firebase | Mantilla',
-          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+          "Firebase || Mantilla",
+          style: TextStyle(color: Colors.white),
         ),
+        backgroundColor: lightBlue,
         centerTitle: true,
-        backgroundColor: Colors.lightBlue,
         actions: [
           IconButton(
-            onPressed: () {
-              setState(() {
-                showFavoritesOnly = !showFavoritesOnly;
-              });
+            icon: const Icon(Icons.logout, color: Colors.white),
+            onPressed: () async {
+              await FirebaseAuth.instance.signOut();
+              Navigator.pushReplacement(
+                context,
+                MaterialPageRoute(builder: (_) => LoginPage()),
+              );
             },
-            // Icon changes based on filter state
-            icon: Icon(
-              showFavoritesOnly ? Icons.favorite : Icons.favorite_border,
-              color: Colors.white,
-            ),
-            tooltip: 'Filter Favorites',
           ),
         ],
       ),
+
       floatingActionButton: FloatingActionButton(
-        onPressed: () => openAddDialog(context),
-        backgroundColor: Colors.lightBlue,
+        backgroundColor: lightBlue,
         child: const Icon(Icons.add, color: Colors.white),
+        onPressed: () => openAddDialog(),
       ),
+
       body: StreamBuilder<QuerySnapshot>(
         stream: service.getItems(),
         builder: (context, snapshot) {
           if (!snapshot.hasData) {
             return const Center(child: CircularProgressIndicator());
           }
-          var docs = snapshot.data!.docs;
 
-          if (showFavoritesOnly) {
-            docs = docs.where((doc) {
-              // Safely access data to avoid errors on old items
-              final data = doc.data() as Map<String, dynamic>;
-              return data.containsKey('is_favorite') &&
-                  data['is_favorite'] == true;
-            }).toList();
-          }
+          final docs = snapshot.data!.docs;
 
           if (docs.isEmpty) {
-            return Center(
-              child: Text(
-                showFavoritesOnly ? 'No favorites yet.' : 'No items found.',
-                style: const TextStyle(fontSize: 18),
-              ),
+            return const Center(
+              child: Text("No items found", style: TextStyle(fontSize: 18)),
             );
           }
 
           return ListView.builder(
+            padding: const EdgeInsets.all(10),
+            itemCount: docs.length,
             itemBuilder: (context, index) {
               var item = docs[index];
               var data = item.data() as Map<String, dynamic>;
-              bool isFavorite = data.containsKey('is_favorite')
-                  ? data['is_favorite']
-                  : false;
 
               return Card(
                 elevation: 3,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadiusGeometry.circular(12),
-                ),
                 margin: const EdgeInsets.symmetric(vertical: 6),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
                 child: ListTile(
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 8,
-                  ),
+                  leading: data['image_url'] != null
+                      ? ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: Image.network(
+                            data['image_url'],
+                            width: 60,
+                            height: 60,
+                            fit: BoxFit.cover,
+                          ),
+                        )
+                      : const Icon(Icons.image, size: 40, color: Colors.blueGrey),
+
                   title: Text(
-                    item['name'],
+                    data['name'] ?? '',
                     style: const TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.bold,
                     ),
                   ),
+
                   subtitle: Text(
-                    'Quantity ${item['quantity']}',
+                    "Quantity: ${data['quantity']}",
                     style: const TextStyle(fontSize: 14, color: Colors.blueGrey),
                   ),
+
                   trailing: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       IconButton(
-                        onPressed: () =>
-                            service.toggleFavorite(item.id, isFavorite),
-                        icon: Icon(
-                          isFavorite ? Icons.favorite : Icons.favorite_border,
-                          color: isFavorite ? Colors.red : Colors.blueGrey,
-                        ),
+                        icon: const Icon(Icons.edit),
+                        onPressed: () => openEditDialog(item),
                       ),
                       IconButton(
-                        onPressed: () => openEditDialog(context, item),
-                        icon: Icon(Icons.edit, color: Colors.orange),
-                      ),
-                      IconButton(
-                        onPressed: () => _confirmDelete(context, item.id),
-                        icon: Icon(Icons.delete, color: Colors.red),
+                        icon: const Icon(Icons.delete, color: Colors.red),
+                        onPressed: () => confirmDelete(item.id),
                       ),
                     ],
                   ),
                 ),
               );
             },
-            padding: EdgeInsets.all(8),
-            itemCount: docs.length,
           );
         },
       ),
     );
   }
 
-  void _confirmDelete(BuildContext context, String id) {
+  // =========================
+  // DELETE ITEM
+  // =========================
+  void confirmDelete(String id) {
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
-        title: const Text('Delete Item'),
-        content: const Text('Are you sure you want to delete this item?'),
+        title: const Text("Delete item"),
+        content: const Text("Are you sure?"),
         actions: [
           TextButton(
+            child: const Text("Cancel"),
+            onPressed: () => Navigator.pop(context),
+          ),
+          TextButton(
+            child: const Text("Delete", style: TextStyle(color: Colors.red)),
             onPressed: () {
               service.deleteItem(id);
               Navigator.pop(context);
             },
-            child: const Text('Delete', style: TextStyle(color: Colors.red)),
           ),
         ],
       ),
     );
   }
 
-  void openAddDialog(BuildContext context) {
-    _nameController.clear();
-    _quantityController.clear();
+  // =========================
+  // ADD ITEM
+  // =========================
+  void openAddDialog() {
+    nameCtrl.clear();
+    qtyCtrl.clear();
+    selectedImageFile = null;
+    selectedImageUrl = null;
 
     showDialog(
       context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Add Item'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: _nameController,
-              decoration: InputDecoration(
-                labelText: 'Name',
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
+      builder: (_) => StatefulBuilder(
+        builder: (context, setStateDialog) => AlertDialog(
+          title: const Text("Add Item"),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: nameCtrl,
+                  decoration: const InputDecoration(
+                    labelText: "Name",
+                    border: OutlineInputBorder(),
+                  ),
                 ),
-              ),
+                const SizedBox(height: 10),
+
+                TextField(
+                  controller: qtyCtrl,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: "Quantity",
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 10),
+
+                if (selectedImageFile != null)
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: Image.file(
+                      selectedImageFile!,
+                      width: 120,
+                      height: 120,
+                      fit: BoxFit.cover,
+                    ),
+                  ),
+
+                const SizedBox(height: 10),
+
+                ElevatedButton.icon(
+                  icon: const Icon(Icons.upload),
+                  label: const Text("Upload Image"),
+                  onPressed: () async {
+                    final picked = await service.pickImageForAddItem();
+                    if (picked != null) {
+                      setStateDialog(() {
+                        selectedImageFile = picked.file;
+                        selectedImageUrl = picked.url;
+                      });
+                    }
+                  },
+                ),
+              ],
             ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _quantityController,
-              decoration: InputDecoration(
-                labelText: 'Quantity',
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
-                ),
-              ),
+          ),
+
+          actions: [
+            TextButton(
+              child: const Text("Cancel"),
+              onPressed: () => Navigator.pop(context),
+            ),
+
+            ElevatedButton(
+              child: const Text("Save"),
+              onPressed: () {
+                if (nameCtrl.text.isNotEmpty && qtyCtrl.text.isNotEmpty) {
+                  service.addItemWithImage(
+                    nameCtrl.text,
+                    int.parse(qtyCtrl.text),
+                    selectedImageUrl,
+                  );
+                  Navigator.pop(context);
+                }
+              },
             ),
           ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              if (_nameController.text.isNotEmpty &&
-                  _quantityController.text.isNotEmpty) {
-                service.addItems(
-                  _nameController.text,
-                  int.parse(_quantityController.text),
-                );
-                Navigator.pop(context);
-              }
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.lightBlue,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadiusGeometry.circular(8),
-              ),
-            ),
-            child: const Text('Save'),
-          ),
-        ],
       ),
     );
   }
 
-  void openEditDialog(BuildContext context, DocumentSnapshot item) {
-    final data = item.data() as Map<String, dynamic>;
-    _nameController.text = data['name'];
-    _quantityController.text = data['quantity'].toString();
+  // =========================
+  // EDIT ITEM
+  // =========================
+  void openEditDialog(DocumentSnapshot item) {
+    nameCtrl.text = item['name'];
+    qtyCtrl.text = item['quantity'].toString();
+
+    selectedImageUrl = item['image_url']; // existing saved URL
+    selectedImageFile = null; // no local file yet
 
     showDialog(
       context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Edit Item'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: _nameController,
-              decoration: InputDecoration(
-                labelText: 'Name',
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
+      builder: (_) => StatefulBuilder(
+        builder: (context, setStateDialog) => AlertDialog(
+          title: const Text("Edit Item"),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (selectedImageFile != null)
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: Image.file(
+                      selectedImageFile!,
+                      width: 120,
+                      height: 120,
+                      fit: BoxFit.cover,
+                    ),
+                  )
+                else if (selectedImageUrl != null)
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: Image.network(
+                      selectedImageUrl!,
+                      width: 120,
+                      height: 120,
+                      fit: BoxFit.cover,
+                    ),
+                  ),
+
+                const SizedBox(height: 10),
+
+                ElevatedButton.icon(
+                  icon: const Icon(Icons.edit),
+                  label: const Text("Change Image"),
+                  onPressed: () async {
+                    final picked = await service.pickImageForAddItem();
+                    if (picked != null) {
+                      setStateDialog(() {
+                        selectedImageFile = picked.file;
+                        selectedImageUrl = picked.url;
+                      });
+                    }
+                  },
                 ),
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _quantityController,
-              decoration: InputDecoration(
-                labelText: 'Quantity',
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
+
+                const SizedBox(height: 10),
+
+                TextField(
+                  controller: nameCtrl,
+                  decoration: const InputDecoration(
+                    labelText: "Name",
+                    border: OutlineInputBorder(),
+                  ),
                 ),
-              ),
+                const SizedBox(height: 10),
+
+                TextField(
+                  controller: qtyCtrl,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: "Quantity",
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+              ],
             ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
           ),
-          ElevatedButton(
-            onPressed: () {
-              if (_nameController.text.isNotEmpty &
-                  _quantityController.text.isNotEmpty) {
-                service.updateItem(
+
+          actions: [
+            TextButton(
+              child: const Text("Cancel"),
+              onPressed: () => Navigator.pop(context),
+            ),
+
+            ElevatedButton(
+              child: const Text("Update"),
+              onPressed: () async {
+                await service.updateItemWithImage(
                   item.id,
-                  _nameController.text,
-                  int.parse(_quantityController.text),
+                  nameCtrl.text,
+                  int.parse(qtyCtrl.text),
+                  selectedImageUrl,
                 );
                 Navigator.pop(context);
-              }
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.orange,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadiusGeometry.circular(8),
-              ),
+              },
             ),
-            child: const Text('Edit'),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

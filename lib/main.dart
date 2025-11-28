@@ -31,7 +31,7 @@ class MyApp extends StatelessWidget {
             if (user == null) {
               return LoginPage();
             } else {
-              return const HomePage();
+              return HomePage();
             }
           } else {
             return const Scaffold(
